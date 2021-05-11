@@ -3,6 +3,7 @@ import pyvisa
 import os
 from json_tricks import dump, dumps
 import numpy as np
+from scipy.integrate import odeint
 from datetime import datetime
 from numpy.random import rand
 import time
@@ -10,6 +11,17 @@ import threading
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import PySimpleGUI as sg
+import dataclasses as dc
+
+
+
+
+@dc.dataclass
+class Voltage:
+    t: float
+    V: float
+    on: bool
+    sweep: bool
 
 
 def draw_figure(canvas, figure):
@@ -26,22 +38,67 @@ def float_or_int(x):
         return float(x)
 
 class RVMock:
-    def __init__(self):
+    def __init__(self, R=1000, C=1e-4):
         self.params = dict()
-        self.rate = 13.0
-        self.t0 = None
+        self.rate = 10.0
+        t0 = time.time()
+        self.t0 = t0
+        self.t = self.t0
+        self.t_prev = t0
+        self.R = R
+        self.C = C
+        self.omega = 1/(self.R*self.C)
+        self.y = np.array([0.0])
+        # Simple RC circuit
+        self.dydt = lambda y, t: -y[0]*self.omega + self.V(t) / self.R 
+        # We need a list of times, voltages, and sweep mode...
+        # Something like [dict(t=0, V=0, sweep=False, on=False), dict(t=2, V=2, sweep=True, on=True)]
+        self.voltages = [Voltage(t=t0, V=0, sweep=False, on=False)]
 
     def write(self, message):
-        setting, value = message[:2], float_or_int(message[2:])
+        try:
+            setting, value = message[:2], float_or_int(message[2:])
+        except:
+            setting = message[:2]
+            value = message[2:]
+            print(f"Message {message} cannot be parsed as a float")
+        
         self.params[setting] = value
+
+        if setting == 'PW':
+            if 'PV' not in self.params:
+                self.params['PV'] = 0.0
+            self.voltages.append(Voltage(t=time.time(), V=self.params['PV'], on=value==1, sweep=False))
+
         if message == "SW1":
-            self.t0 = time.time() # Start sweeping!
-            self.t = 0
+            t_start = time.time()
+            t_current = t_start
+            for i in range(self.segments):
+                V = self.sweep_voltages[i % 4]
+                T = self.times[i % 4]
+                self.voltages.append(Voltage(t=t_current, V=V, on=self.voltages[-1].on, sweep=True))
+                t_current += T
+            
+            # Turn off after the sweep
+            self.voltages.append(Voltage(t=t_current, V=0, sweep=False, on=False))
+            
+        if setting == 'TM':
+            hr, min = [int(x) for x in value.split(',')]
+            self.hr = hr
+            self.min = min
+            self.now = datetime.now()
+    
+    def query(self, message):
+        if message == '?ER':
+            return '00'
 
     @property
     def times(self):
         return np.array([self.params[k] for k in ['TA', "TB", "TC", "TD"]])
 
+    @property
+    def sweep_voltages(self):
+        return np.array([self.params[k] for k in ['VA', "VB", "VC", "VD"]])
 
     @property
     def segments(self):
@@ -52,29 +109,37 @@ class RVMock:
         return sum(self.times[i % 4] for i in range(self.segments))
 
     def V(self, t):
-        if t > self.ttotal:
-            return self.params['VD']
+        if hasattr(t, "__len__"):
+            return np.array([self._V(t_) for t_ in t])
         else:
-            t_used = t % sum(self.times) # Position in the cycle, after this length we repeat...
-            if t_used < self.params['TA']:
-                return self.params['VA'] + (self.params['VB'] - self.params['VA']) * t_used / self.params['TA']
-            elif t_used < (self.params['TA'] + self.params['TB']):
-                return self.params['VB'] + (self.params['VC'] - self.params['VB']) * (t_used - self.params['TA']) / self.params['TB']
-            elif t_used < (self.params['TA'] + self.params['TB'] + self.params['TC']):
-                return self.params['VC'] + (self.params['VD'] - self.params['VC']) * (t_used - self.params['TA'] - self.params['TB']) / self.params['TC']
-            else:
-                return self.params['VD'] + (self.params['VA'] - self.params['VD']) * (t_used - self.params['TA'] - self.params['TB'] - self.params['TC']) / self.params['TD']
+            return self._V(t)
 
+    def _V(self, t):
+        N  = len(self.voltages)
+        for i in range(N-1, -1, -1):
+            volt = self.voltages[i]
+            if t >= volt.t:
+                if volt.sweep:
+                    dT = self.voltages[i+1].t - volt.t
+                    deltaV = self.voltages[i+1].V - volt.V
+                    return volt.V + deltaV * (t - volt.t) / dT
+                else:
+                    return volt.V
+    
 
     def I(self, t):
-        return self.V(t) / 12.0e6 # Fixed resistance
+        y = odeint(self.dydt, self.y, (self.t_prev, t))
+        self.t_prev = t
+        self.y = y[-1]
+        return self.y[0] # Current in amps...
 
     def read_ascii_values(self, timeout=7000, container=list):
         dt = 1.0/self.rate
         self.tprev = self.t
         while True:
-            self.t = time.time() - self.t0 # Current time...
-            if self.t > self.ttotal:
+            self.t = time.time()
+            if self.t > self.voltages[-1].t:
+                print(f"Experiment complete at {self.t}")
                 time.sleep(timeout/1000)
                 raise ValueError
             elif self.t < (self.tprev + dt):
@@ -82,14 +147,15 @@ class RVMock:
                 # print(f"{self.tprev}")
                 time.sleep(0.03)
             else:
-                # print("Escaped")
-                return container([self.V(self.t), np.random.randn()*1e-9+self.I(self.t),
+                val = container([self.V(self.t), np.random.randn()*1e-9 + self.I(self.t),
                                 0, 0, 1, np.floor(self.t / 60), np.floor(self.t % 60), int((self.t % 1)*100)])
+                return val
         
 
 
 
 class CV:
+    """I should probably reverse all voltages and currents..."""
     def __init__(self, rv):
         self.rv = rv
         self.rv.timeout = 7000
@@ -100,36 +166,55 @@ class CV:
         self.data = {}
         # The current dataset goes here...
         self.current_data = []
+        self.current_params = None
         self.sweep_mode = "SW0"
         self.ix = 0 
         self.iy = 1
+
+        # Default setup 
+        self.rv.write("CE") # Clear errors initially...
+        self.rv.write("PW0") # Turn OFF
+        self.rv.write("PV0") # Set polarization to 0
+        self.rv.write("PV0") # Set current to 0
+        self.rv.write("BY1")
+        self.rv.write("PI1") # Gain the polarization by 0.01 for now
+        self.rv.write("OL1") # Limit current to the max value set...
+        self.now = datetime.now()
+        self.rv.write(f"TM{self.now.hour},{self.now.minute}") # This should be the right
+        # timezone setting
+
 
         # CV knows the sweep mode - maybe it should know the default x and y
         # variables to plot as well
 
 
     def write(self, message):
-        self.log.append((message, self.rv.write(message)))
-    
-
+        self.rv.write(message) # Just gives the bytes - not very interesting
+        resp = self.rv.query("?ER")
+        print(resp)
+        self.log.append((message, resp))
+        if int(resp) != 0:
+            self.rv.write("CE") # Clear error
     
     def measure_ocp(self, Npts=10):
         
+        self.current_params = dict(experiment="OCP", Irange=0, Npts=Npts)
         self.ix = -1
         self.iy = 0
         self.xlabel = "Time (s)"
         self.ylabel = "OCP vs. Ref (V)" # Set up everything needed to plot?
 
-        self.write("PO1") # Set mode to galvanostat
+        self.write("PW0") # Turn polarization off        
+        self.write("PO0") # Set mode to potentiostat
         self.write("ON1") # Stay in rest mode - do not actually apply a current!
 
 
 
-        self.setup_voltammetry_outputs() # Default X = ΔRV, Y = I.
+        self.setup_voltammetry_outputs() # Default X = ΔRE, Y = I.
 
         # DVM setup
         self.write("DG0") # Number of digits: 0 = 5, 2 = 4x9, 60 Hz
-        self.write("RG0") # Autorange voltage input range = 0, or use RG2 for the 2V mode...
+        self.write("RG0") # Autorange current input...
         
         
 
@@ -157,6 +242,9 @@ class CV:
         self.write("PW0") # Turn polarization off
         self.write("RU0") # Turn DVM off (maybe not needed since in single mode)
         self.write("BK0") # Do a reset, which seems like a generally good idea
+
+        self.expt += 1
+        self.data[self.expt] = dict(params=self.current_params, data=np.array(self.current_data))
         return np.array(self.current_data)
 
 
@@ -176,19 +264,19 @@ class CV:
         fast_step_time = max(dV/rate, 0.01) # Minimum 10 ms time step...
         times = np.array([T1, fast_step_time, T2, fast_step_time])
         
+
+
         #######################################################
         self.write("PW0") # Turn polarization OFF
         self.write("RU0") # Turn the DVM OFF
-        self.write("SW0")
+        self.write("SW0") # Turn the sweep OFF
         
         # This is awkward - this should probably be done in run...
         # Each experiment should be autolabeled
         # Setup should just do setup, and save this information to a
         # self.current_setup dictionary?
         # Should I have one giant dataclass for the Solartron State? Possibly...
-        self.expt += 1
-        self.data[self.expt] = dict()
-        self.data[self.expt]['params'] = dict(experiment='Sq Wave Voltammetry - Analog Sweep', V1=V1, V2=V2, T1=T1, T2=T2, segments=segments, Irange=Irange, Ilim=Ilim)
+        self.current_params = dict(experiment='Sq Wave Voltammetry - Analog Sweep', V1=V1, V2=V2, T1=T1, T2=T2, segments=segments, Irange=Irange, Ilim=Ilim)
         
         
         # Polarization / Mode
@@ -251,9 +339,10 @@ class CV:
         self.write("RU0") # Turn the DVM OFF
         self.write("SW0")
         
-        self.expt += 1
-        self.data[self.expt] = dict()
-        self.data[self.expt]['params'] = dict(experiment='Cyclic Voltammetry', V1=V1, V2=V2, V3=V3, V4=V4, rate=rate, segments=segments, Irange=Irange, Ilim=Ilim)
+
+        self.current_params = dict(experiment='Cyclic Voltammetry', V1=V1,
+                                V2=V2, V3=V3, V4=V4, rate=rate,
+                                segments=segments, Irange=Irange, Ilim=Ilim)
         
         
         # Polarization / Mode
@@ -311,6 +400,10 @@ class CV:
         for t, name in zip(times, ["TA", "TB", "TC", "TD"]):
             self.write(f"{name}{t}")
         
+    def setup_arbitrary_pulses(self):
+        """A list of voltages, times, and a number of repeat cycles?
+        So a double-step chronoamperometry would be something like V1, T1"""       
+        pass
 
     def get_data(self):
         """Return the data from the potentiostat in the format
@@ -326,11 +419,10 @@ class CV:
     def run(self):
         # What else do we need to know?
         # Which two columns are the x and y data to plot?
-        # 
         self.write("PW1") # Turn polarization ON
         self.write("RU1") # Turn the DVM ON
         self.write(self.sweep_mode) # Start the (analog) sweep!
-        
+
         self.current_data = []
         
         try:
@@ -340,8 +432,9 @@ class CV:
             print("Expt done?")
             pass
         
+        self.expt += 1
+        self.data[self.expt] = dict(params=self.current_params, data=np.array(self.current_data))
         
-        self.data[self.expt]['data'] = np.array(self.current_data)
         self.write("PW0")
         self.write("RU0")
         self.write("SW0")
@@ -415,8 +508,9 @@ def main():
     rm = pyvisa.ResourceManager()
     s = rm.list_resources()
     print(s)
-    rv = rm.open_resource(s[0])
-    cv = CV(rv)
+    # rv = rm.open_resource(s[0])
+    # cv = CV(rv)
+    cv = CV(RVMock())
 
     text_size = (14, 1)
     param_size = (8, 1)
