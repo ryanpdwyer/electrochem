@@ -15,9 +15,11 @@ from datetime import datetime
 import os
 import sys
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy
 import pandas as pd
 import plotly.express as px
+from munch import Munch
 
 import threading
 
@@ -39,10 +41,9 @@ def make_filename(values, key):
     directory, basefilename = os.path.split(values[key])
     return os.path.join(directory, f"{datestring} {basefilename}")
 
-
 def setupAnalogDiscovery():
 
-    info = dict()
+    info = Munch()
     version = create_string_buffer(16)
     dwf.FDwfGetVersion(version)
     info.version = str(version.value)
@@ -66,6 +67,7 @@ def setupAnalogDiscovery():
         hdwf = None # No device...
     
     return hdwf, info
+
 
 def setupOutputsDC(hdwf, V_ch1, V_ch2):
 
@@ -108,7 +110,7 @@ def readData(hdwf, buffer=1000):
 
     rg = (c_double*buffer)()
     dwf.FDwfAnalogInStatusData(hdwf, c_int(0), rg, len(rg)) # get channel 1 data
-    return rg
+    return np.array(rg)
 
 
 def cleanupAnalogDiscovery(hdwf):
@@ -126,7 +128,10 @@ def draw_figure(canvas, figure):
 Vgate = np.linspace(-1,1,11)
 Vdrain = np.linspace(-1,1,11)
 
-def runAD(Vgate, Vdrain, filename, dataArray, delay_gate=0.1, delay_drain=0.1):
+bufferSize = 1000
+frequency = 1e5
+
+def runAD(Vgate, Vdrain, filename, dataArray, delay_gate=0.1, delay_drain=0.1, currentTraces=[None,None]):
 
     hdwf, info = setupAnalogDiscovery()
 
@@ -149,7 +154,7 @@ def runAD(Vgate, Vdrain, filename, dataArray, delay_gate=0.1, delay_drain=0.1):
 
 
     setupOutputsDC(hdwf, Vdrain[0], Vgate[0])
-    setupInputs(hdwf, frequency=1e5, range=5.0)
+    setupInputs(hdwf, frequency=frequency, range=5.0,  buffer=bufferSize)
 
     pvoltsRange = c_double()
     dwf.FDwfAnalogInChannelRangeGet(hdwf, c_int(0), byref(pvoltsRange))
@@ -169,14 +174,16 @@ def runAD(Vgate, Vdrain, filename, dataArray, delay_gate=0.1, delay_drain=0.1):
 
             rg = readData(hdwf)
 
+            currentTraces[0] = currentTraces[1]
+            currentTraces[1] = rg
+            
+
             dc = sum(rg)/len(rg)
             print("DC: "+str(dc)+"V")
             dataArray.append(dict(Vg=Vg, Vd=Vd, Isd_mA=dc))
 
 
     cleanupAnalogDiscovery(hdwf)
-
-
 
 
 
@@ -202,24 +209,59 @@ if __name__ == "__main__":
         Npts = int(values['-Npts-'+name])
         return np.linspace(Vi, Vf, Npts)
     
+
+
     layout = [[sg.Text("Gate Voltage Vg", size=(3*(text_size[0]+param_size[0]),1), 
                     justification='left')],
                 voltages("Vgate"),
                 [sg.Text("Drain Voltage Vd", size=(3*(text_size[0]+param_size[0]),1), 
                     justification='left')],
-                voltages("Vdrain"),
-                [Text("Gate delay (s):"), Input(default_text=f"0.5", key='-gate-delay-'),
-                 Text("Drain delay (s):"), Input(default_text=f"0.5", key='-drain-delay-')],
+                voltages("Vdrain", Npts=21),
+                [Text("Gate delay (s):"), Input(default_text=f"2", key='-gate-delay-'),
+                 Text("Drain delay (s):"), Input(default_text=f"0.2", key='-drain-delay-')],
                 [sg.Button("Run", size=(10,2)), sg.FileSaveAs("Save", target='-FILENAME-', default_extension=""),
                 sg.Input(visible=False, enable_events=True, key='-FILENAME-'), ],
-                [Text("Data points: ", key='-npts-')],
+                [sg.Canvas(size=(900, 20), key='-CANVAS-')],
+                [sg.Text("Data points: ", key='-npts-', size=(12,1))],
                 [sg.Button('Exit', size=(10, 2), pad=((280, 0), 3))]]
-    window = sg.Window("Window Title", layout, finalize=True)
+    window = sg.Window("Window Title", layout, finalize=True, size=(900, 800))
+
+
+    canvas_elem = window['-CANVAS-']
+    canvas = canvas_elem.TKCanvas
+    x1 = x2 = np.arange(bufferSize)/frequency*1000
+    y1 = y2 = np.zeros(bufferSize)
+    fig, (ax1, ax2) = plt.subplots(ncols=2)
+    ax1.grid(True)
+    ax2.grid(True)
+    fig.tight_layout()
+    fig_agg = draw_figure(canvas, fig)
+
+    cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+    # np.arange(buffer)
+
+    l1, = ax1.plot(x1, y1, '.')
+    l2, = ax1.plot(x2, y2, '.')
+    ax1.set_xlabel("Time (s)")
+    ax1.set_ylabel("Current (mA)")
+    ax2.set_xlabel("Vdrain (V)")
+    ax2.set_ylabel("Isd (mA)")
+
+
+    def update_plot(fig, ax1, ax2):
+        ax1.relim()
+        ax1.autoscale_view(tight=True)
+        ax2.autoscale()
+        ax2.autoscale_view(tight=True)
+        fig.canvas.draw()
+        fig.canvas.flush_events()
 
 
     class Thread:
         def is_alive(self):
             return False
+    
     thread = Thread()
     was_running = False
     while True:
@@ -231,25 +273,52 @@ if __name__ == "__main__":
         
         if event == 'Run' and not running:
             data = []
+            currentTraces = [None, None]
+            prevPts = 0
             running = True
             Vgate = getVoltageInfo(values, "Vgate")
             Vdrain = getVoltageInfo(values, "Vdrain")
             drain_delay = float(values['-drain-delay-'])
             gate_delay = float(values['-gate-delay-'])
-            thread = threading.Thread(target=runAD, args=(Vgate, Vdrain, "f1", data, gate_delay, drain_delay), daemon=True)
+            thread = threading.Thread(target=runAD, args=(Vgate, Vdrain, "f1", data, gate_delay, drain_delay, currentTraces), daemon=True)
             thread.start()
         
         if running:
             pts = len(data)
             window['-npts-'].update(f"Data points: {pts}")
+            y1, y2 = currentTraces
+            if y1 is not None:
+                l1.set_ydata(y1)
+            if y2 is not None:
+                l2.set_ydata(y2)
+
+            for point in data[prevPts:]:
+                index = np.argmin(abs(point['Vg'] - Vgate))
+                ax2.scatter(point['Vd'], point['Isd_mA'], label=point['Vg'], c=cycle[index % 10])
+
+
+            prevPts = pts
+
+            update_plot(fig, ax1, ax2)
+            fig_agg.draw()
+
+            
         
-        if was_running and not running:
+        if was_running and not running and len(data) > 0:
             df = pd.DataFrame(data)
             df['Vg_str'] = [f"{x:.3f}" for x in df['Vg']]
             df['Vd_str'] = [f"{x:.3f}" for x in df['Vd']]
 
-            fig = px.scatter(df, x='Vg', y='Isd_mA', color='Vd_str')
-            fig.show()
+            fig_px = px.scatter(df, x='Vg', y='Isd_mA', color='Vd_str')
+            fig_px.show()
+
+            for point in data[prevPts:]:
+                index = np.argmin(abs(point['Vg'] - Vgate))
+                ax2.scatter(point['Vd'], point['Isd_mA'], label=point['Vg'], c=cycle[index % 10])
+
+
+            update_plot(fig, ax1, ax2)
+            fig_agg.draw()
         
         if event == '-FILENAME-':
             if not values['-FILENAME-']:
