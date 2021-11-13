@@ -191,6 +191,7 @@ if __name__ == "__main__":
     font = "Helvetica 18"
     sg.set_options(font=font)
     text_size = (10, 1)
+    big_button = (10,2)
     param_size = (8, 1)
     def Text(*args, **kwargs):
         return sg.Text(*args, **kwargs, size=text_size)
@@ -210,6 +211,8 @@ if __name__ == "__main__":
         return np.linspace(Vi, Vf, Npts)
     
 
+    figWidth=870
+    figHeight=350
 
     layout = [[sg.Text("Gate Voltage Vg", size=(3*(text_size[0]+param_size[0]),1), 
                     justification='left')],
@@ -219,34 +222,39 @@ if __name__ == "__main__":
                 voltages("Vdrain", Npts=21),
                 [Text("Gate delay (s):"), Input(default_text=f"2", key='-gate-delay-'),
                  Text("Drain delay (s):"), Input(default_text=f"0.2", key='-drain-delay-')],
-                [sg.Button("Run", size=(10,2)), sg.FileSaveAs("Save", target='-FILENAME-', default_extension=""),
-                sg.Input(visible=False, enable_events=True, key='-FILENAME-'), ],
-                [sg.Canvas(size=(900, 20), key='-CANVAS-')],
-                [sg.Text("Data points: ", key='-npts-', size=(12,1))],
-                [sg.Button('Exit', size=(10, 2), pad=((280, 0), 3))]]
-    window = sg.Window("Window Title", layout, finalize=True, size=(900, 800))
+                [sg.Button("Run", size=big_button),
+                sg.FileSaveAs("Save", target='-FILENAME-', default_extension="", size=big_button),
+                sg.Input(visible=False, enable_events=True, key='-FILENAME-'),
+                sg.Text("Data points: ", key='-npts-', size=(12,1)),
+                sg.Button('Exit', size=big_button, pad=((280, 0), 3))
+                ],
+                [sg.Canvas(size=(figWidth, figHeight), background_color="white", key='-CANVAS-')]
+                ]
+    window = sg.Window("Window Title", layout, finalize=True, size=(figWidth+40, 820))
 
 
     canvas_elem = window['-CANVAS-']
     canvas = canvas_elem.TKCanvas
     x1 = x2 = np.arange(bufferSize)/frequency*1000
     y1 = y2 = np.zeros(bufferSize)
-    fig, (ax1, ax2) = plt.subplots(ncols=2)
+    fig, (ax1, ax2) = plt.subplots(ncols=2, figsize=(figWidth/72, figHeight/72))
+    fig.subplots_adjust(left=0.15, wspace=0.35, right=1-0.02, top=1-0.03)
     ax1.grid(True)
     ax2.grid(True)
-    fig.tight_layout()
-    fig_agg = draw_figure(canvas, fig)
+    
 
     cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
-
-    # np.arange(buffer)
 
     l1, = ax1.plot(x1, y1, '.')
     l2, = ax1.plot(x2, y2, '.')
     ax1.set_xlabel("Time (s)")
     ax1.set_ylabel("Current (mA)")
     ax2.set_xlabel("Vdrain (V)")
-    ax2.set_ylabel("Isd (mA)")
+    ax2.set_ylabel("$I_\\mathrm{sd}$ (mA)")
+    # fig.tight_layout()
+    # fig.subplots_adjust()
+    
+    fig_agg = draw_figure(canvas, fig)
 
 
     def update_plot(fig, ax1, ax2):
@@ -283,7 +291,7 @@ if __name__ == "__main__":
             thread = threading.Thread(target=runAD, args=(Vgate, Vdrain, "f1", data, gate_delay, drain_delay, currentTraces), daemon=True)
             thread.start()
         
-        if running:
+        if was_running:
             pts = len(data)
             window['-npts-'].update(f"Data points: {pts}")
             y1, y2 = currentTraces
@@ -322,7 +330,7 @@ if __name__ == "__main__":
         
         if event == '-FILENAME-':
             if not values['-FILENAME-']:
-                sg.popup("File not saved.")
+                sg.popup("WARNING: File not saved.")
             else:
                 df = pd.DataFrame(data)
                 basename = make_filename(values, '-FILENAME-')
