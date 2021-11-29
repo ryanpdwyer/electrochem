@@ -458,7 +458,7 @@ def main(test=False):
     layout = [[sg.Combo(list_keys(experiment_dict),
                 default_value='Cyclic Voltammetry', k='-SELECT_EXPERIMENT-',
                 size=(25, 1), enable_events=True)],
-                columns,
+                columns, # This is our key spot...
                 [sg.Text("Current Range", size=text_size),
                 sg.Combo(current_ranges, default_value=current_ranges[0],
                           key='current_range', size=param_size),

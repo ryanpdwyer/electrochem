@@ -71,6 +71,16 @@ def setupAnalogDiscovery():
 
 def setupOutputsDC(hdwf, V_ch1, V_ch2):
 
+    # enable positive supply
+    dwf.FDwfAnalogIOChannelNodeSet(hdwf, c_int(0), c_int(0), c_double(True)) 
+    # set voltage to 5 V
+    dwf.FDwfAnalogIOChannelNodeSet(hdwf, c_int(0), c_int(1), c_double(5.0)) 
+    # enable negative supply
+    dwf.FDwfAnalogIOChannelNodeSet(hdwf, c_int(1), c_int(0), c_double(True)) 
+    # set voltage to -5 V
+    dwf.FDwfAnalogIOChannelNodeSet(hdwf, c_int(1), c_int(1), c_double(-5.0)) 
+    # master enable
+    dwf.FDwfAnalogIOEnableSet(hdwf, c_int(True))
     # this option will enable dynamic adjustment of analog out settings like: frequency, amplitude...
     dwf.FDwfDeviceAutoConfigureSet(hdwf, c_int(3)) 
 
@@ -284,6 +294,9 @@ if __name__ == "__main__":
             currentTraces = [None, None]
             prevPts = 0
             running = True
+            ax2.clear()
+            ax2.set_xlabel("Vdrain (V)")
+            ax2.set_ylabel("$I_\\mathrm{sd}$ (mA)")
             Vgate = getVoltageInfo(values, "Vgate")
             Vdrain = getVoltageInfo(values, "Vdrain")
             drain_delay = float(values['-drain-delay-'])
