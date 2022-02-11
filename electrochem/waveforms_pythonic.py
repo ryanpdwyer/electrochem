@@ -140,8 +140,10 @@ class AnalogDiscovery:
             g1, _ = self.AnalogImpedanceStatusInput(0)
             g2, p2 = self.AnalogImpedanceStatusInput(1)
 
+
+
             gainC1[i] = 1.0/g1
-            gainC2[i] = 1.0/g2
+            gainC2[i] = 1.0/g2 # Relative to channel 1....
             phaseC2[i] = -p2 # Leave it in volts...
             
             # peak voltage value:
