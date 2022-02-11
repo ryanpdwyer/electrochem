@@ -4,6 +4,8 @@ from dwfconstants import *
 from munch import Munch
 import time
 
+from dataclasses import dataclass
+
 import numpy as np
 
 if sys.platform.startswith("win"):
@@ -24,6 +26,18 @@ def GetVersion():
     dwf.FDwfGetVersion(version)
     return str(version.value)
 
+def getImpedance(hdwf, channel: int):
+    gain = c_double()
+    phase = c_double()
+    dwf.FDwfAnalogImpedanceStatusInput(hdwf, c_int(channel), byref(gain), byref(phase)) # relative to FDwfAnalogImpedanceAmplitudeSet Amplitude/C1
+    return gain.value, phase.value
+
+@dataclass
+class Network:
+    f: np.ndarray
+    ch1: np.ndarray
+    ch2: np.ndarray
+    phase: np.ndarray
 
 
 class AnalogDiscovery:
@@ -46,74 +60,116 @@ class AnalogDiscovery:
         if self.info.n_devices > 0:
             self.open(device)
     
+    def AnalogImpedanceStatusInput(self, channel: int):
+        return getImpedance(self.hdwf, channel)
+    
     def tearDown(self):
         dwf.FDwfAnalogOutReset(self.hdwf, c_int(0))
         dwf.FDwfDeviceCloseAll()
         self.info['closed_device'] = True
 
+    def AnalogImpedanceStatus(self):
+        sts = c_byte()
+        szerr = create_string_buffer(512)
+        status = dwf.FDwfAnalogImpedanceStatus(self.hdwf, byref(sts))
+        if status == 0:
+            dwf.FDwfGetLastErrorMsg(szerr)
+        return sts.value, str(szerr.value)
+    
+    def AnalogImpedanceFrequencySet(self, f_Hz: float):
+        dwf.FDwfAnalogImpedanceFrequencySet(self.hdwf, c_double(f_Hz)) # frequency in Hertz
+    
+    def AnalogImpedancePeriodSet(self, cycles: int):
+        dwf.FDwfAnalogImpedancePeriodSet(self.hdwf, c_int(cycles))
+    
+    def AnalogImpedanceFrequencySet(self, start: float):
+        dwf.FDwfAnalogImpedanceFrequencySet(self.hdwf, c_double(start)) # frequency in Hertz
+
+    def AnalogImpedanceAmplitudeSet(self, amplitude: float):
+        """Amplitude is the zero-to-peak amplitude."""
+        dwf.FDwfAnalogImpedanceAmplitudeSet(self.hdwf, c_double(amplitude)) 
+    
+    def AnalogImpedanceReset(self):
+        dwf.FDwfAnalogImpedanceReset(self.hdwf)
+
+    def DeviceAutoConfigureSet(self, setting=3):
+        dwf.FDwfDeviceAutoConfigureSet(self.hdwf, c_int(setting)) # this option will enable dynamic adjustment of analog out settings like: frequency, amplitude...
+
+
+    def AnalogImpedanceConfigure(self, on=True):
+        val = 1 if on else 0
+        dwf.FDwfAnalogImpedanceConfigure(self.hdwf, c_int(val)) # start
+
+    def AnalogOutNodeEnableSet(self, channel: int, node: int, enable: bool)
+        dwf.FDwfAnalogOutNodeEnableSet(self.hdwf, c_int(channel), c_int(node), c_bool(enable))
+
+    def FDwfAnalogOutNodeFunctionSet(self, channel: int, node: int, func: int)
+        dwf.FDwfAnalogOutNodeFunctionSet(self.hdwf, c_int(channel), c_int(node), c_int(func))
 
     def setup_Network_Analyzer(self, steps: int, start: float,
-                                stop: float, reference: float, amplitude: float, periods):
-        dwf.FDwfDeviceAutoConfigureSet(self.hdwf, c_int(3)) # this option will enable dynamic adjustment of analog out settings like: frequency, amplitude...
-        dwf.FDwfAnalogImpedanceReset(self.hdwf)
-        # These two parameters don't matter for us I believe
-        dwf.FDwfAnalogImpedanceModeSet(self.hdwf, c_int(0)) # 0 = W1-C1-DUT-C2-R-GND, 1 = W1-C1-R-C2-DUT-GND, 8 = AD IA adapter
-        dwf.FDwfAnalogImpedanceReferenceSet(self.hdwf, c_double(reference)) # reference resistor value in Ohms
+                                stop: float, amplitude: float, periods: int):
 
-        dwf.FDwfAnalogImpedancePeriodSet(self.hdwf, c_int(8))
+        self.DeviceAutoConfigureSet(3)
+        self.AnalogImpedanceReset()
+        self.AnalogImpedancePeriodSet(periods)
+        self.AnalogImpedanceFrequencySet(start) # frequency in Hertz
+        self.AnalogImpedanceAmplitudeSet(amplitude) # Zero to peak
 
-        dwf.FDwfAnalogImpedanceFrequencySet(self.hdwf, c_double(start)) # frequency in Hertz
-        dwf.FDwfAnalogImpedanceAmplitudeSet(self.hdwf, c_double(amplitude)) # 1V amplitude = 2V peak2peak signal
-        dwf.FDwfAnalogImpedanceConfigure(self.hdwf, c_int(1)) # start
+        self.AnalogImpedanceConfigure(on=True) # start
 
 
-        rgHz = np.geomspace(start, stop, steps)
-        rgGaC1 = np.zeros(steps)
-        rgGaC2 = np.zeros(steps)
-        rgPhC2 = np.zeros(steps)
+        freq = np.geomspace(start, stop, steps)
+        gainC1 = np.zeros(steps)
+        gainC2 = np.zeros(steps)
+        phaseC2 = np.zeros(steps)
 
         sts = c_byte()
         szerr = create_string_buffer(512)
 
         # Should be in a thread...
         for i in range(steps):
-            hz = rgHz[i]
-            dwf.FDwfAnalogImpedanceFrequencySet(self.hdwf, c_double(hz)) # frequency in Hertz
+            hz = freq[i]
+            self.AnalogImpedanceFrequencySet(hz)
             time.sleep(0.01)
-            dwf.FDwfAnalogImpedanceStatus(self.hdwf, None) # ignore last capture since we changed the frequency
-            # I need to think about how to increase the delay in cycles
+            self.AnalogImpedanceStatusInput(0)  # I need to think about how to increase the delay in cycles
             while True:
-                if dwf.FDwfAnalogImpedanceStatus(self.hdwf, byref(sts)) == 0:
-                    dwf.FDwfGetLastErrorMsg(szerr)
-                    print(str(szerr.value))
-                    quit()
-                if sts.value == 2:
+                if self.AnalogImpedanceStatus()[0] == 2:
                     break
                 time.sleep(0.01)
-            
-            gain1 = c_double()
-            gain2 = c_double()
-            phase2 = c_double()
-            dwf.FDwfAnalogImpedanceStatusInput(self.hdwf, c_int(0), byref(gain1), 0) # relative to FDwfAnalogImpedanceAmplitudeSet Amplitude/C1
-            dwf.FDwfAnalogImpedanceStatusInput(self.hdwf, c_int(1), byref(gain2), byref(phase2)) # relative to Channel 1, C1/C#
 
-            rgGaC1[i] = 1.0/gain1.value
-            rgGaC2[i] = 1.0/gain2.value
-            rgPhC2[i] = -phase2.value # Leave it in volts...
+            g1, _ = self.AnalogImpedanceStatusInput(0)
+            g2, p2 = self.AnalogImpedanceStatusInput(1)
+
+            gainC1[i] = 1.0/g1
+            gainC2[i] = 1.0/g2
+            phaseC2[i] = -p2 # Leave it in volts...
+            
             # peak voltage value:
-            # rgGaC1[i] = amplitude/gain1.value 
-            # rgGaC2[i] = amplitude/gain1.value/gain2.value 
+            # GaC1[i] = amplitude/gain1.value 
+            # GaC2[i] = amplitude/gain1.value/gain2.value 
 
         # Don't I have a real function for this?
 
         # Output is just the voltage that came in (potentially a factor of 10 bigger / smaller?)
 
-        dwf.FDwfAnalogImpedanceConfigure(self, c_int(0)) # stop
+        self.AnalogImpedanceConfigure(on=False)
 
-        return rgHz, rgGaC1, rgGaC2, rgPhC2
+        return Network(f=freq, ch1=gainC1, ch2=gainC2, phase=phaseC2)
 
 if __name__ == '__main__':
+    import matplotlib.pyplot as plt
     ad = AnalogDiscovery()
     ad.setup()
+    values = ad.setup_Network_Analyzer(51, 100, 100000, 1, 16)
+    print(values.f)
+    print(values.ch1)
+    print(values.ch2)
+    print(values.phase)
+
     ad.tearDown()
     print(ad.info)
+    fig, (ax1, ax2) = plt.subplots(nrows=2, sharex=True)
+    ax1.loglog(values.f, values.ch1)
+    ax1.loglog(values.f, values.ch2)
+    ax2.semilogx(values.f, values.phase*180/np.pi)
+    plt.show()
