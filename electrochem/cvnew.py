@@ -36,6 +36,7 @@ class RVMock:
         if message == "SW1":
             self.t0 = time.time() # Start sweeping!
             self.t = 0
+    
 
     @property
     def times(self):
@@ -87,12 +88,13 @@ class RVMock:
         
 
 
-
+# Add to this file, or create a new one?
 class CV:
     def __init__(self, rv):
         self.rv = rv
         self.rv.timeout = 7000
-        self.rv.write_termination = "\n"
+        self.rv.write_termination = "\n" # Set on instrument
+        self.rv.read_termination = '\r'
         self.log = []
         self.ocp = [] # Record of all OCP measurements performed...
         self.expt = 0
@@ -110,7 +112,10 @@ class CV:
     def write(self, message):
         self.log.append((message, self.rv.write(message)))
     
-
+    def query(self, message):
+        answer = self.rv.query(message)
+        self.log.append((message, answer))
+        return answer
     
     def measure_ocp(self, Npts=10):
         

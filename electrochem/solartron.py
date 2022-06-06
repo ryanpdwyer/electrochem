@@ -13,6 +13,7 @@ import binascii
 from ctypes import *
 import time
 import threading
+from cvnew import CV
 
 from dwfconstants import *
 import sys
@@ -50,7 +51,6 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 def setupAnalogDiscovery():
-
     info = Munch()
     version = create_string_buffer(16)
     dwf.FDwfGetVersion(version)
@@ -76,16 +76,48 @@ def setupAnalogDiscovery():
     
     return hdwf, info
 
-
-    
-
-
 def list_gpib_instruments():
     rm = pyvisa.ResourceManager()
     s = rm.list_resources()
     return rm, s
 
 
+class CVGUI:
+    def __init__(self, rv=None):
+        self.rv = rv
+        self.connected = False
+        self.cv = None
+        self.setUp()
+    
+    def setUp(self):
+        if self.rv is not None:
+            self.cv = CV(self.rv)
+            self.connected = True
+            print("Connected CV to Solartron")
+        else:
+            print("No GPIB connection - not connected")
+    
+    def tearDown(self):
+        pass
+    
+    def log(self):
+        if self.cv is not None:
+            return "\n".join(self.cv.log)
+        else:
+            return ""
+
+    def layout(self):
+        self._layout = [[sg.Multiline(self.log(), key='--CV-GUI-LOG--')]]
+        return self._layout
+
+    def handle_events(self, event, window, values):
+        self.handlers = {
+        }
+        if event in self.handlers:
+            self.handlers[event](window, values)
+    
+    def update(self, window, values):
+        self._layout[0][0].update(self.log())
 
 
 
@@ -97,11 +129,11 @@ class AnalogDiscovery:
     
 
     def layout(self):
-        self.layout = [
+        self._layout = [
         [sg.Text(self.connection_status(), key='--AnalogDiscovery-Status--')],
         [sg.Button('Connect', key='--AnalogDiscovery-Connect--')]
         ]
-        return self.layout
+        return self._layout
     
     def update(self, window, values):
         pass
@@ -164,12 +196,12 @@ class GPIBController:
         combo_default = None
         if self.resource_index is not None:
             combo_default = self.resources[self.resource_index]
-        self.layout = [
+        self._layout = [
             [sg.Text('Instruments:'), sg.Combo(self.resources, size=(14, 1), key='--GPIB-LIST--',  default_value=combo_default)],
             [sg.Text(self.status_text(), size=(20, 1), key='--GPIB-STATUS--')],
             [sg.Button('Connect', key='--GPIB-CONNECT--')]
         ]
-        return self.layout
+        return self._layout
     
     def connect(self, window, values):
         selected_instrument = values['--GPIB-LIST--']
@@ -193,6 +225,8 @@ class GPIBController:
     
 
 
+
+
 class Timer:
     def __init__(self, title='Timer', **kwargs):
         self.title = 'Timer'
@@ -208,12 +242,12 @@ class Timer:
         self.start_key = f'--Timer-start-'+self.id
         self.stop_key = f'--Timer-stop-'+self.id
         self.reset_key = f'--Timer-reset-'+self.id
-        self.layout = [
+        self._layout = [
             [sg.Text(f'{self.title}')],
             [sg.Text('Time (s)', size=(10, 1)), sg.InputText("", size=(10, 1), key=self.time_key)],
             [sg.Button('Start', key=self.start_key), sg.Button('Stop', key=self.stop_key), sg.Button('Reset', key=self.reset_key)],
         ]
-        return self.layout
+        return self._layout
     
     # Event handlers...
     def start(self, window, values):
@@ -244,7 +278,7 @@ class Timer:
         else:
             self.elapsed_time = self.carryover_time
         
-        self.layout[1][1].update(f'{self.elapsed_time:.2f}')
+        self._layout[1][1].update(f'{self.elapsed_time:.2f}')
 
     def __repr__(self):
         return f"Timer(title='{self.title}', id='{self.id}')"
@@ -261,15 +295,20 @@ def main(test=False):
 
     # Components...
     
-    c = Munch(ad=AnalogDiscovery(), gpib = GPIBController(), timer = Timer(title='Timer', kwargs={'size': text_size}))
+    c = Munch(ad=AnalogDiscovery(), gpib = GPIBController())
+
+    c.cvGUI = CVGUI(rv=c.gpib.rv)
+    print(c.cvGUI.cv.query("?VN"))
+
+
 
 
     layout = [
     [sg.TabGroup([[
     sg.Tab('GPIB', c.gpib.layout()),
     sg.Tab('AD', c.ad.layout()),
+    sg.Tab("Solartron", c.cvGUI.layout()),
     sg.Tab('Output', [[sg.Output((80, 3))]])]])],
-    [c.timer.layout()],
     [sg.Button('Exit', size=(8,2))]
     ]
 
