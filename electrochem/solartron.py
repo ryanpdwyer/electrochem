@@ -1,15 +1,83 @@
 import pyvisa
 import os
+import datetime
+import numpy
+np = numpy
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import PySimpleGUI as sg
 import os
+import signal
 from munch import Munch
 import binascii
+from ctypes import *
 import time
+import threading
+
+from dwfconstants import *
+import sys
+
+exit_event = threading.Event()
+stop_event = threading.Event()
+change_voltage_event = threading.Event()
+
+
+if sys.platform.startswith("win"):
+    dwf = cdll.dwf
+elif sys.platform.startswith("darwin"):
+    dwf = cdll.LoadLibrary("/Library/Frameworks/dwf.framework/dwf")
+else:
+    dwf = cdll.LoadLibrary("libdwf.so")
 
 def random_key(size=8):
     return str(binascii.b2a_base64(os.urandom(6), newline=False))
+
+
+def make_filename(values, key):     
+    today = datetime.today()
+    datestring = today.strftime("%Y-%m-%d %H-%M")
+    directory, basefilename = os.path.split(values[key])
+    return os.path.join(directory, f"{datestring} {basefilename}")
+
+def wvEnum():
+    cdevices = c_int()
+    dwf.FDwfEnum(c_int(0), byref(cdevices))
+    return int(cdevices.value)
+
+def signal_handler(signum, frame):
+    exit_event.set()
+
+signal.signal(signal.SIGINT, signal_handler)
+
+def setupAnalogDiscovery():
+
+    info = Munch()
+    version = create_string_buffer(16)
+    dwf.FDwfGetVersion(version)
+    info.version = str(version.value)
+
+    cdevices = c_int()
+    dwf.FDwfEnum(c_int(0), byref(cdevices))
+    info['number_of_devices'] = str(cdevices.value)
+
+    if cdevices.value > 0:
+        print("Opening first device")
+        # 
+        hdwf = c_int()
+        dwf.FDwfDeviceOpen(c_int(0), byref(hdwf))
+
+        if hdwf.value == hdwfNone.value:
+            print("failed to open device")
+            info['opened_device'] = False
+        else:
+            info['opened_device'] = True
+    else:
+        hdwf = None # No device...
+    
+    return hdwf, info
+
+
+    
 
 
 def list_gpib_instruments():
@@ -18,26 +86,49 @@ def list_gpib_instruments():
     return rm, s
 
 
+
+
+
+
 class AnalogDiscovery:
     def __init__(self):
-        pass
+        self.hdwf = None
+        self.info = []
     
 
     def layout(self):
         self.layout = [
-            sg.Text('Analog Discovery')
+        [sg.Text(self.connection_status(), key='--AnalogDiscovery-Status--')],
+        [sg.Button('Connect', key='--AnalogDiscovery-Connect--')]
         ]
         return self.layout
     
     def update(self, window, values):
         pass
     
+    def connect(self, window, values):
+        hdwf, info = setupAnalogDiscovery()
+        self.hdwf = hdwf
+        self.info.append(info)
+        print(info)
+        window['--AnalogDiscovery-Status--'].update(self.connection_status())
+    
+    def connection_status(self):
+        if self.hdwf is None:
+            conn_str = 'Not connected'
+        else:
+            conn_str = 'Connected'
+        return f"Status: {conn_str}"
+    
     def handle_events(self, event, window, values):
-        pass
+        self.handlers = {
+            '--AnalogDiscovery-Connect--': self.connect
+        }
+        if event in self.handlers:
+            self.handlers[event](window, values)
 
 class GPIBController:
-    def __init__(self, title="Solartron Connection", gpib_address=4):
-        self.title = title
+    def __init__(self, gpib_address=4):
         self.connected = False 
         self.gpib_address = gpib_address
         self.setUp()
@@ -74,7 +165,6 @@ class GPIBController:
         if self.resource_index is not None:
             combo_default = self.resources[self.resource_index]
         self.layout = [
-            [sg.Text(self.title)],
             [sg.Text('Instruments:'), sg.Combo(self.resources, size=(14, 1), key='--GPIB-LIST--',  default_value=combo_default)],
             [sg.Text(self.status_text(), size=(20, 1), key='--GPIB-STATUS--')],
             [sg.Button('Connect', key='--GPIB-CONNECT--')]
@@ -175,7 +265,10 @@ def main(test=False):
 
 
     layout = [
-    [c.ad.layout(), c.gpib.layout()],
+    [sg.TabGroup([[
+    sg.Tab('GPIB', c.gpib.layout()),
+    sg.Tab('AD', c.ad.layout()),
+    sg.Tab('Output', [[sg.Output((80, 3))]])]])],
     [c.timer.layout()],
     [sg.Button('Exit', size=(8,2))]
     ]
