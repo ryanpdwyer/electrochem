@@ -90,6 +90,8 @@ class RVMock:
 
 # Add to this file, or create a new one?
 class CV:
+    current_ranges_dict = {"Auto": 0, "2 uA": 1, "20 uA": 2, "200 uA": 3, '2 mA': 4, '20 mA': 5, '200 mA': 6, '2 A': 7}
+    current_limits_dict = {"2 uA": 0, "20 uA": 1, "200 uA": 2, '2 mA': 3, '20 mA': 4, '200 mA': 5, '2 A': 6}
     def __init__(self, rv):
         self.rv = rv
         self.rv.timeout = 7000

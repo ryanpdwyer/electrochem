@@ -102,12 +102,37 @@ class CVGUI:
     
     def log(self):
         if self.cv is not None:
-            return "\n".join(self.cv.log)
+            return "\n".join([repr(x) for x in self.cv.log])
         else:
             return ""
 
     def layout(self):
-        self._layout = [[sg.Multiline(self.log(), key='--CV-GUI-LOG--')]]
+        self.output_options = {'x1': 1, 'x10': 10}
+        self.input_options = {'x1': 1, 'x0.01': 0.01}
+        self.control_bandwidths = {'600 kHz': 0, '360 kHz': 1, '> 1 MHz': 2, 
+        '> 600 kHz': 3, '24 kHz': 4, '8 kHz': 5, '2.4 kHz': 6, '800 Hz': 7,
+        '80 Hz': 8, '8 Hz': 9}
+        self.output_options_keys = list(self.output_options.keys())
+        self.input_options_keys = list(self.input_options.keys())
+        self.control_bandwidths_keys = list(self.control_bandwidths.keys())
+        current_ranges = list(self.cv.current_ranges_dict.keys())
+        current_lims = list(self.cv.current_limits_dict.keys())
+        self._layout = [
+            [sg.T("Current Range"), sg.Combo(current_ranges, default_value='2 mA', key='--CV-IRANGE--'),
+            sg.T('Current Lim'), sg.Combo(current_lims, default_value='2 mA', key='--CV-ILIM--'),
+            sg.T('Potential (V)'), sg.Input(default_text='0', key='--CV-Potential--')
+            ],
+            [sg.T("Volt. Out Gain"),
+            sg.Combo(self.output_options_keys, default_value=self.output_options_keys[0], key='--CV-VoltageOutGain--'),
+            sg.T("Curr. Out Gain"),
+            sg.Combo(self.output_options_keys, default_value=self.output_options_keys[0], key='--CV-CurrentOutGain--'),
+            sg.T("Volt. Input Gain"),
+            sg.Combo(self.input_options_keys, default_value=self.input_options_keys[0],
+                key='--CV-VoltageInGain--')],
+            [sg.T("Control Loop Bandwidth"),
+            sg.Combo(self.control_bandwidths_keys, default_value=self.control_bandwidths_keys[2])],
+            [sg.Button("Zero Offset"), sg.Button("Update Settings"), sg.T("Update needed")],
+            [sg.Multiline(self.log(), key='--CV-GUI-LOG--')]]
         return self._layout
 
     def handle_events(self, event, window, values):
@@ -117,7 +142,7 @@ class CVGUI:
             self.handlers[event](window, values)
     
     def update(self, window, values):
-        self._layout[0][0].update(self.log())
+        self._layout[-1][0].update(self.log())
 
 
 
@@ -312,7 +337,7 @@ def main(test=False):
     [sg.Button('Exit', size=(8,2))]
     ]
 
-    window = sg.Window("Solartron Electrochemistry", layout, finalize=True, size=(900, 700))
+    window = sg.Window("Solartron Electrochemistry", layout, finalize=True, size=(1100, 700))
 
 
     while True:
