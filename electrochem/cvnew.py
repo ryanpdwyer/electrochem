@@ -415,7 +415,7 @@ def make_filename(cv, values, key):
     directory, basefilename = os.path.split(values[key])
     return os.path.join(directory, f"{datestring} {basefilename}")
 
-def main(test=False):
+def main(test=False, gpib=4):
 
     font = "Helvetica 18"
     sg.set_options(font=font)
@@ -426,7 +426,12 @@ def main(test=False):
         rm = pyvisa.ResourceManager()
         s = rm.list_resources()
 
-        rv = rm.open_resource(s[0])
+        ind = list(s).index(f'GPIB0::{gpib}::INSTR')
+
+
+
+        rv = rm.open_resource(s[ind])
+
     cv = CV(rv)
 
     text_size = (14, 1)
@@ -474,7 +479,8 @@ def main(test=False):
                 sg.Text("Status: ", key='status', size=(15, 1)),
                 sg.Text("Expt: ", key='Expt', size=(9, 1))],
                 [sg.Canvas(size=(640, 480), key='-CANVAS-')],
-                [sg.Button('Exit', size=(10, 2), pad=((280, 0), 3)), sg.Text("Pts: ", key='npts', size=(10,2))]]
+                [sg.Text("Log: ", key='Log', size=(10, 2)), sg.Button('Exit', size=(10, 2), pad=((50, 0), 3)),
+                sg.Text("Pts: ", key='npts', size=(10,2))]]
 
     window = sg.Window("Window Title", layout, finalize=True)
 
@@ -524,9 +530,19 @@ def main(test=False):
             window['status'].update('Status: Running')
             time.sleep(1) # Wait until the CV is actually running...
             window['Expt'].update(f"Expt: {cv.expt}")
+            if len(cv.log) > 0:
+                log = cv.log[-1]
+            else:
+                log = ""
+            window['Log'].update(f'Log: {log}')
         
         if event == 'Stop':
             cv.stop() # Probably a good idea?
+            if len(cv.log) > 0:
+                log = cv.log[-1]
+            else:
+                log = ""
+            window['Log'].update(f'Log: {log}')
 
         if event == '-FILENAME-':
             if not values['-FILENAME-']:
@@ -574,6 +590,12 @@ def main(test=False):
             fig.canvas.flush_events()
 
             fig_agg.draw()
+
+            if len(cv.log) > 0:
+                log = cv.log[-1]
+            else:
+                log = ""
+            window['Log'].update(f'Log: {log}')
 
 
     window.close()
