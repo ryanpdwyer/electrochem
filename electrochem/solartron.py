@@ -13,7 +13,7 @@ import binascii
 from ctypes import *
 import time
 import threading
-from cvnew import CV
+from cvnew import CV, RVMock
 
 from dwfconstants import *
 import sys
@@ -88,6 +88,7 @@ class CVGUI:
         self.connected = False
         self.cv = None
         self.setUp()
+        self.modes = ['OCP', 'Setup EIS', 'EIS', 'CV', 'CV+EIS']
     
     def setUp(self):
         if self.rv is not None:
@@ -117,6 +118,14 @@ class CVGUI:
         self.control_bandwidths_keys = list(self.control_bandwidths.keys())
         current_ranges = list(self.cv.current_ranges_dict.keys())
         current_lims = list(self.cv.current_limits_dict.keys())
+
+        self.expt_params = {'OCP': sg.Col([[sg.Text('Points'), sg.Input(10, key='--CV-OCP-points--')]], visible=False),
+                        'Setup EIS': sg.Col([[sg.Text('Amp. (V)'), sg.Input(1, key='--CV-Setup-EIS-Amp--'),
+                                            sg.Text('Freq. (Hz)'), sg.Input(100, key='--CV-Setup-EIS-Freq--')
+                                            ],
+                                            [sg.Text('Ch. 1 Range'), sg.Combo(['200 mV', '2.5 V'], default_value = '2.5 V', key='--CV-EIS-Ch1--'),
+                                            sg.Text('Ch. 2 Range'), sg.Combo(['200 mV', '2.5 V'], default_value = '2.5 V', key='--CV-EIS-Ch2--')]], visible=True)}
+
         self._layout = [
             [sg.T("Current Range"), sg.Combo(current_ranges, default_value='2 mA', key='--CV-IRANGE--'),
             sg.T('Current Lim'), sg.Combo(current_lims, default_value='2 mA', key='--CV-ILIM--'),
@@ -132,6 +141,8 @@ class CVGUI:
             [sg.T("Control Loop Bandwidth"),
             sg.Combo(self.control_bandwidths_keys, default_value=self.control_bandwidths_keys[2])],
             [sg.Button("Zero Offset"), sg.Button("Update Settings"), sg.T("Update needed")],
+            [sg.T('Choose Mode:'), sg.Combo(self.modes, self.modes[0], key='--CV-Mode--', enable_events=True)],
+            self.expt_params.values(),
             [sg.Multiline(self.log(), key='--CV-GUI-LOG--')]]
         return self._layout
 
@@ -185,10 +196,14 @@ class AnalogDiscovery:
             self.handlers[event](window, values)
 
 class GPIBController:
-    def __init__(self, gpib_address=4):
+    def __init__(self, gpib_address=4, test=False):
         self.connected = False 
         self.gpib_address = gpib_address
+        self.rv = None
         self.setUp()
+        if test:
+            self.rv = RVMock()
+            self.connected=True
 
     
     def setUp(self):
@@ -320,8 +335,10 @@ def main(test=False):
 
     # Components...
     
-    c = Munch(ad=AnalogDiscovery(), gpib = GPIBController())
+    c = Munch(ad=AnalogDiscovery(), gpib = GPIBController(test=test))
 
+    print(c.gpib.rv)
+    print(c.gpib.rv.query('?VN'))
     c.cvGUI = CVGUI(rv=c.gpib.rv)
     print(c.cvGUI.cv.query("?VN"))
 
@@ -350,7 +367,17 @@ def main(test=False):
         for val in c.values():
             val.handle_events(event, window, values)
             val.update(window, values)
+        
+        if test:
+            if event != '__TIMEOUT__':
+                print(event)
 
 
 if __name__ == '__main__':
-    main()
+    import sys
+    args = sys.argv
+    if args[-1] == 'test':
+        test = True
+    else:
+        test = False
+    main(test=test)

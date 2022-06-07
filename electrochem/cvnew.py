@@ -37,6 +37,13 @@ class RVMock:
             self.t0 = time.time() # Start sweeping!
             self.t = 0
     
+    def query(self, message):
+        if message == '?VN':
+            return '54' # Correct version
+        else:
+            time.sleep(5)
+            raise ValueError("No response received")
+    
 
     @property
     def times(self):

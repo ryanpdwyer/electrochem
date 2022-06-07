@@ -295,6 +295,23 @@ python-versions = ">=3.7"
 typing-extensions = "*"
 
 [[package]]
+name = "pyvisa-py"
+version = "0.5.3"
+description = "Pure Python implementation of a VISA library."
+category = "main"
+optional = false
+python-versions = ">=3.7"
+
+[package.dependencies]
+pyvisa = ">=1.12.0"
+typing-extensions = "*"
+
+[package.extras]
+gpib-ctypes = ["gpib-ctypes (>=0.3.0)"]
+serial = ["pyserial (>=3.0)"]
+usb = ["pyusb"]
+
+[[package]]
 name = "pywin32-ctypes"
 version = "0.2.0"
 description = ""
@@ -353,7 +370,7 @@ python-versions = "*"
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.8"
-content-hash = "90ba1d4a4835a406b98e841add48a1757542356111f5489a89510169b6545543"
+content-hash = "e8482b41da6dd9703bf5a09882d4d91294e5e81a2415d4c721456cc6de13f023"
 
 [metadata.files]
 altgraph = [
@@ -592,6 +609,10 @@ python-dateutil = [
 pyvisa = [
     {file = "PyVISA-1.12.0-py3-none-any.whl", hash = "sha256:4cbe2f37f75dd233638154f377af7522b8c1dc8324cce3dc3e9563a9b7b84add"},
     {file = "PyVISA-1.12.0.tar.gz", hash = "sha256:73a38e6bf7431449bd3e1c7bf51a995f62fcae68df580c01c30628629c6b5cbf"},
+]
+pyvisa-py = [
+    {file = "PyVISA-py-0.5.3.tar.gz", hash = "sha256:4c80954ce454582169ecfd7117b3df8c3b668bd62073aa6798e92d3d1395f58a"},
+    {file = "PyVISA_py-0.5.3-py3-none-any.whl", hash = "sha256:9f876de5945560421424c62b7880f328b59530fac6fbcbe604ae71646632b331"},
 ]
 pywin32-ctypes = [
     {file = "pywin32-ctypes-0.2.0.tar.gz", hash = "sha256:24ffc3b341d457d48e8922352130cf2644024a4ff09762a2261fd34c36ee5942"},
