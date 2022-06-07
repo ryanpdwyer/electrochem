@@ -338,7 +338,6 @@ def main(test=False):
     c = Munch(ad=AnalogDiscovery(), gpib = GPIBController(test=test))
 
     print(c.gpib.rv)
-    print(c.gpib.rv.query('?VN'))
     c.cvGUI = CVGUI(rv=c.gpib.rv)
     print(c.cvGUI.cv.query("?VN"))
 
